@@ -1,0 +1,56 @@
+name: Darkmoon security gate
+
+# Demo workflow for the Darkmoon Pentest GitHub Action (OSS edition).
+#
+# It runs on a GitHub-hosted runner with no real Darkmoon deployment: the
+# committed launcher demo/darkmoon-engine.sh stands in for the engine that
+# oss-script-path points at, and plants a genuine completed Juice Shop campaign
+# (2 critical / 1 high / 2 medium, all exploited) into the OSS data dir. The
+# REAL @darkmoon/client then correlates, waits, reads findings, synthesizes
+# SARIF, writes the severity table to the job summary, and fails the job from
+# the FINDINGS (fail-on: critical,high) — never from the engine's exit code.
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write   # required to upload SARIF to code scanning
+
+jobs:
+  darkmoon:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Make the OSS launcher executable
+        run: chmod +x demo/darkmoon-engine.sh
+
+      - name: Darkmoon autonomous pentest (OSS)
+        id: darkmoon
+        uses: ASCIT31/darkmoon-action@v1
+        env:
+          # Paths the committed launcher plants into (repo-relative).
+          DM_DATA_DIR: ${{ github.workspace }}/demo/data
+          DM_REPORTS:  ${{ github.workspace }}/demo/reports
+          DM_SEED:     ${{ github.workspace }}/demo/seed
+        with:
+          mode: oss
+          oss-data-dir:    ${{ github.workspace }}/demo/data      # campaigns/ + vulnerabilities/
+          oss-reports-dir: ${{ github.workspace }}/demo/reports
+          oss-script-path: ${{ github.workspace }}/demo/darkmoon-engine.sh
+          target: http://juice-shop.local:3000
+          focus: sqli,idor
+          fail-on: critical,high        # blocking gate, evaluated from findings
+          report-format: sarif          # synthesize SARIF for code scanning
+          poll-interval-ms: '1000'
+          timeout-ms: '60000'
+
+      - name: Upload SARIF to code scanning
+        if: ${{ always() && steps.darkmoon.outputs.report-path != '' }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.darkmoon.outputs.report-path }}
